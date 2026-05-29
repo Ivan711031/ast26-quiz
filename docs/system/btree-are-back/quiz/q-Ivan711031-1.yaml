@@ -1,18 +1,18 @@
 author: Ivan711031
-date: 2026-05-26
+date: 2026-05-29
 question: |
-  在實作支援變長度鍵值的 B-Tree 時，為了節省空間與增進快取效率，系統會採用 Prefix Truncation 技術。當一個 leaf node 準備進行前綴截斷時，系統應該如何最高效且穩定地決定該節點內所有鍵值的最長共同前綴？
+  在實作《B-Trees Are Back》中提出的 node layout 最佳化時，系統會利用 heads 陣列（預先連續儲存每個鍵值的前 4 bytes）來加速節點內的 binary search。假設你的資料庫被用來儲存大量的網頁索引，且鍵值全部都是以 `https://www.` 開頭的完整 URL。在這種情境下，為何原先的 heads 最佳化會失效？系統的 adaptive layout 應該如何動態調整來解決這個問題？
 options:
-  - text: "比對該節點的 lower fence key 與 upper fence key 來決定共同前綴長度。"
+  - text: "所有 URL 的前 4 bytes 皆相同（http），導致 heads 無法在 binary search 時提供有效的區別資訊。系統應動態切換至 hints 陣列，改為儲存鍵值出現差異的 byte offset 與該位置的字元，以恢復搜尋效率。"
     correct: true
     explanation: |
-      在 B-Tree 中，任何插入節點的鍵值都必定介於 lower fence 與 upper fence 之間。因此，兩者的共同前綴必定是該節點內所有鍵值的共同前綴。此方法不僅計算時間為 O(1)，而且前綴長度不會因為節點內部鍵值的插入或刪除而改變，避免了昂貴的資料重寫開銷。
-  - text: "比對該節點內目前儲存的第一個鍵值（最小值）與最後一個鍵值（最大值）來決定。"
+      heads 陣列的設計初衷是透過連續記憶體存取鍵值前綴來減少 cache miss。當面對具備極長共同前綴的資料（如 URL）時，固定長度的 heads 數值會完全相同，迫使搜尋退化為跟隨指標去存取實際鍵值，產生大量 cache miss。adaptive layout 偵測到 heads 區分度過低時，會切換成 hints 格式，精準紀錄「哪一個 byte 開始不同」及「不同的字元是什麼」，從而再次將 binary search 留在 CPU 快取內完成。
+  - text: "URL 的長度變異過大，導致 heads 陣列無法保持固定大小，進而破壞連續記憶體的配置優勢。系統應退回最原始的無最佳化 slotted page 格式以節省空間。"
     explanation: |
-      雖然節點內的資料是有序的，但依賴目前存在的鍵值來決定前綴會導致不穩定性。如果刪除或插入新的邊界鍵值，前綴長度可能會發生改變，這會迫使系統重寫節點內所有的資料，在高效能儲存系統中會引發極大的效能災難。
-  - text: "在每次發生鍵值變動時，線性掃描節點內所有的鍵值並重新計算最長共同前綴。"
+      heads 的定義就是強制擷取固定長度（例如前 4 bytes），因此完全不受鍵值總長度變異的影響，也不會破壞記憶體連續性。效能下降的根本原因在於「區別能力」喪失，而非長度變異。此外，系統有比退回原始 slotted page 更好的 hints 選擇來維持效能。
+  - text: "heads 會將字串強制轉型為整數進行比較，而 URL 中包含大量的特殊符號與斜線，導致整數比較邏輯錯誤。系統應啟動 frame-of-reference encoding 來壓縮並過濾特殊符號。"
     explanation: |
-      線性掃描所有鍵值的時間複雜度與節點內的資料量成正比，這在講求極致效能的資料庫中效率極低；此外，這與依賴現有最大最小值的做法一樣，會面臨前綴長度不穩定的問題，導致頻繁的記憶體搬移。
-  - text: "在節點內部維護一個額外的 Trie 資料結構，並直接從根節點提取共同前綴。"
+      heads 儲存的 4 bytes 是直接以 bitwise 或 byte-by-byte 的方式進行比較，並不需要也不會因為特殊符號而產生邏輯錯誤。且 frame-of-reference encoding 主要用於數值密集且差異不大的整數情境（如時間戳記），並不適用於解決字串前綴重複的問題。
+  - text: "heads 的設計僅支援固定長度的鍵值搜尋，對於 variable-sized key 的 URL 會發生記憶體越界錯誤。系統應在每個節點內部維護獨立的 hash table 來處理字串。"
     explanation: |
-      在以 page 為基礎的 B-Tree 節點中，通常會採用 Slotted Page 格式來確保記憶體連續性與最佳的 CPU 快取命中率。引入 Trie 結構會產生大量指標與分散的記憶體配置，完全破壞原有的連續性優勢並增加額外的空間負擔。
+      heads 正是為了解決 variable-sized key 在指標跳躍時造成的 cache miss 而被發明出來的，並非不支援變長度鍵值。另外，B-Tree 節點內部若改用 hash table，將無法支援範圍查詢，這直接破壞了 B-Tree 作為資料庫核心索引的價值。
