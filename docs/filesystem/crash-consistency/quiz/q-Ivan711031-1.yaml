@@ -1,0 +1,18 @@
+author: Ivan711031
+date: 2026-05-29
+question: |
+  在 ext4 檔案系統中，引入了 Extent 模型來改善 ext2 使用 indirect block pointer 浪費空間的問題。請問在下列哪一種情境下，ext4 的 Extent tree 最有可能會退化，導致其 metadata 佔用的空間與 ext2 的結構差不多，甚至更大？
+options:
+  - text: "一次性寫入一個 10 GB 的影片檔，且硬碟剛格式化完畢。"
+    explanation: |
+      剛格式化完畢的硬碟擁有最大且最完整的連續可用空間。在這種情況下，ext4 的 allocator 可以輕易找到大區塊，因此只需要極少數的 extent 就能記錄這 10 GB 的資料（每個 extent 最多可連續表示 128 MB）。
+  - text: "在硬碟剩餘空間極度碎片化的情況下，嘗試寫入一個大檔案。"
+    correct: true
+    explanation: |
+      Extent 節省空間的前提是硬碟上必須有「連續的空閒區塊」。如果硬碟嚴重碎片化，allocator 找不到大塊連續區域，只能將這個大檔案切碎，分配到成千上萬個零碎的小區塊中。這會迫使 ext4 建立龐大的 extent tree 來記錄這些微小的 extent，導致 metadata 所佔用的空間暴增，退化得跟 ext2 差不多甚至更糟。
+  - text: "頻繁地讀取同一個檔案的內容，但不進行任何寫入操作。"
+    explanation: |
+      單純的讀取操作只會將檔案內容載入記憶體的 page cache 中，完全不會改變檔案在硬碟上的實體分佈狀態。因此，這項操作不會觸發 allocator 重新分配區塊，自然也不會導致 extent tree 的結構發生改變或退化。
+  - text: "將數千個檔案的權限進行修改。"
+    explanation: |
+      修改權限只會更新 inode 內部的 metadata 狀態（例如 UID、GID 或 permission 欄位），這完全不涉及檔案實際資料內容的搬移或重新分配。因此，檔案的 extent 結構與長度完全不會受到影響，不會發生退化現象。
