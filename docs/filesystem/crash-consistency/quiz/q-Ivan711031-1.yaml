@@ -6,11 +6,11 @@ question: |
   【情境二】呼叫 fsync() 後，kernel 正在 writeback 時斷電。
   兩個情境對 on-disk 結構造成什麼差異？下列敘述何者正確？
 options:
-  - text: "情境一的資料因為仍在 page cache 中，斷電會全部蒸發，使硬碟中得資料維持在 1 MB 的乾淨舊狀態，沒有產生任何結構不一致。情境二因為強迫啟動了 writeback，四個結構的寫入沒有順序保證，斷電反而會讓系統產生資料互相覆蓋或 orphan block 等損壞。"
+  - text: "因為情境一的資料仍在 page cache 中，斷電會全部消失，使得硬碟中資料維持 1 MB，沒有產生結構不一致。情境二啟動了 writeback，四個結構的寫入沒有順序保證，斷電會使系統產生資料互相覆蓋或 orphan block 等損壞。"
     correct: true
     explanation: |
-      在情境一（writeback 之前），包含 data block、bitmap、inode extent 與 size 這四個步驟都還只在記憶體裡，硬碟完全沒被動到。而在情境二， `fsync()` 強迫啟動了 writeback，在 writeback 過程中只要任何一個 subset 寫到一半斷電，都會產生如資安漏洞或 orphan block 等各種 crash outcome。
-  - text: "情境一會造成 Crash Consistency，因為 delayed allocation 會先將 Block bitmap 標記為 used 寫入硬碟以預留空間。情境二因為有 `fsync()` 保護，保證系統會自動還原回 1 MB 的狀態。"
+      在情境一，包含 data block、bitmap、inode extent 與 size 這四個步驟都還只在記憶體裡，硬碟完全沒被動到。而在情境二， `fsync()` 強迫啟動了 writeback，在 writeback 過程中只要任何一個 subset 寫到一半斷電，都會產生如資安漏洞或 orphan block 等各種 crash outcome。
+  - text: "情境一會造成 Crash Consistency，因為 delayed allocation 會先將 Block bitmap 標記為 used 寫入硬碟以預留空間。情境二因為有 `fsync()` 保護，系統會自動還原回 1 MB 的狀態。"
     explanation: |
       allocator 只有在 periodic writeback 或 `fsync()` 被呼叫時，才會決定實體位置，因此在情境一時 Block bitmap 根本還沒寫入硬碟。另外，單純的 `fsync()` 並沒有提供 rollback 的功能。
   - text: "情境一的資料雖然消失，但 inode size 會被保留為 11 MB，產生找不到資料的錯誤。情境二的資料會安全寫入，因為 `fsync()` 會繞過 writeback 機制，直接對硬碟下達沒有順序風險的 atomic 寫入。"
