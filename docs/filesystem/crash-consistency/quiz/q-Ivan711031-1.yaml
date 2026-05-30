@@ -1,18 +1,21 @@
 author: Ivan711031
-date: 2026-05-29
+date: 2026-05-30
 question: |
-  在 ext4 檔案系統中，引入了 Extent 模型來改善 ext2 使用 indirect block pointer 浪費空間的問題。請問在下列哪一種情境下，ext4 的 Extent tree 最有可能會退化，導致其 metadata 佔用的空間與 ext2 的結構差不多，甚至更大？
+  Niko 對一個既有的 1 MB 檔案 append 了 10 MB 的資料。請想像以下兩種情境：
+  【情境一】Niko 寫入後沒有呼叫 `fsync()`，在系統處於 delayed allocation 等待期的 10 秒後，Mac mini 斷電。
+  【情境二】Niko 寫入後立刻呼叫 `fsync()`，然而在 kernel 執行 writeback 寫入 SSD 的過程中，Mac mini 斷電。
+  根據file的四個更新步驟與 Crash Consistency 概念，在不依賴 `fsck` 修復的情況下，這兩種情境對硬碟上的檔案系統結構會造成什麼差異？
 options:
-  - text: "一次性寫入一個 10 GB 的影片檔，且硬碟剛格式化完畢。"
-    explanation: |
-      剛格式化完畢的硬碟擁有最大且最完整的連續可用空間。在這種情況下，ext4 的 allocator 可以輕易找到大區塊，因此只需要極少數的 extent 就能記錄這 10 GB 的資料（每個 extent 最多可連續表示 128 MB）。
-  - text: "在硬碟剩餘空間極度碎片化的情況下，嘗試寫入一個大檔案。"
+  - text: "情境一的資料因為仍在 page cache 中，斷電會全部蒸發，使硬碟中得資料維持在 1 MB 的乾淨舊狀態，沒有產生任何結構不一致。情境二因為強迫啟動了 writeback，四個結構的寫入沒有順序保證，斷電反而極有可能讓系統掉進資料互相覆蓋或 orphan block 等嚴重的結構損壞狀態。"
     correct: true
     explanation: |
-      Extent 節省空間的前提是硬碟上必須有「連續的空閒區塊」。如果硬碟嚴重碎片化，allocator 找不到大塊連續區域，只能將這個大檔案切碎，分配到成千上萬個零碎的小區塊中。這會迫使 ext4 建立龐大的 extent tree 來記錄這些微小的 extent，導致 metadata 所佔用的空間暴增，退化得跟 ext2 差不多甚至更糟。
-  - text: "頻繁地讀取同一個檔案的內容，但不進行任何寫入操作。"
+      在情境一（writeback 之前），包含 data block、bitmap、inode extent 與 size 這四個步驟都還只在記憶體裡，斷電等於全部歸零，硬碟完全沒被動到，因此維持完美的乾淨狀態。而在情境二， `fsync()` 強迫啟動了 writeback，在 writeback 過程中只要任何一個 subset 寫到一半斷電，都會產生如資安漏洞或 orphan block 等各種 crash outcome。
+  - text: "情境一會引發嚴重的 Crash Consistency 問題，因為 delayed allocation 預設會先將 Block bitmap 標記為 used 寫入硬碟以預留空間，斷電會產生孤兒區塊。情境二因為有 `fsync()` 保護，保證系統會自動還原回 1 MB 的乾淨狀態。"
     explanation: |
-      單純的讀取操作只會將檔案內容載入記憶體的 page cache 中，完全不會改變檔案在硬碟上的實體分佈狀態。因此，這項操作不會觸發 allocator 重新分配區塊，自然也不會導致 extent tree 的結構發生改變或退化。
-  - text: "將數千個檔案的權限進行修改。"
+      allocator 只有在 periodic writeback 或 `fsync()` 被呼叫時，才會真正去看見需求並決定實體位置，因此在情境一時 Block bitmap 根本還沒寫入硬碟。此外，單純的 `fsync()` 並沒有提供 rollback的功能。
+  - text: "情境一的資料雖然蒸發，但 inode size 會被意外保留為 11 MB，產生找不到資料的錯誤。情境二的資料會安全寫入，因為 `fsync()` 會繞過 writeback 機制，直接對硬碟下達沒有順序風險的 atomic 寫入。"
     explanation: |
-      修改權限只會更新 inode 內部的 metadata 狀態（例如 UID、GID 或 permission 欄位），這完全不涉及檔案實際資料內容的搬移或重新分配。因此，檔案的 extent 結構與長度完全不會受到影響，不會發生退化現象。
+      情境一中， inode size 的更新也僅發生在記憶體內，所以斷電後大小絕對會維持 1 MB ，不會變成 11 MB 。情境二中， `fsync()` 的本質就是「強迫觸發 writeback 」，它不可能繞過 writeback ，也無法消除那四個 on-disk structure 必須分別寫入硬碟所帶來的順序風險。
+  - text: "兩者在硬碟上造成的損壞是一模一樣的。因為只要應用程式呼叫了 `write()` ，不管有沒有 `fsync()` ， kernel 都會立刻把 data block 寫入 SSD ，斷電都會導致這 10 MB 變成沒有 inode 指向的垃圾資料。"
+    explanation: |
+      ext4 的 delayed allocation 是把「何時寫」與「寫到哪」分開。呼叫 `write()` 時只是把 dirty page 留在 page cache 裡，並不會立刻把 data block 寫入 SSD。只有在 writeback 被觸發時（如情境二），資料才會真正開始搬移至硬碟。因此兩者對硬碟造成的影響截然不同。
